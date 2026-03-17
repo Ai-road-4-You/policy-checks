@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout policy-checks
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: Ai-road-4-You/policy-checks
 
@@ -71,7 +71,7 @@ jobs:
           cat /tmp/results.md
 
       - name: Upload results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: policy-check-${{ github.run_number }}
           path: /tmp/results.md
