@@ -1,0 +1,78 @@
+name: Policy Enforcement
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        description: "Repository to check (org/name)"
+        required: true
+        type: string
+    secrets:
+      GOVERNANCE_PAT:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout policy-checks
+        uses: actions/checkout@v4
+        with:
+          repository: Ai-road-4-You/policy-checks
+
+      - name: Install OPA
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/v0.71.0/opa_linux_amd64_static
+          chmod 755 opa
+          sudo mv opa /usr/local/bin/
+
+      - name: Gather repo metadata
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GOVERNANCE_PAT }}
+        run: |
+          REPO="${{ inputs.repo }}"
+          echo "Checking $REPO..."
+
+          # Gather repo data
+          gh api "/repos/$REPO" > /tmp/repo.json
+
+          # Check governance files
+          FILES_JSON="{}"
+          for f in ".github/CODEOWNERS" ".github/dependabot.yml" "AGENTS.md" "CLAUDE.md" ".github/copilot-instructions.md"; do
+            exists=$(gh api "/repos/$REPO/contents/$f" --jq '.name' 2>/dev/null && echo "true" || echo "false")
+            FILES_JSON=$(echo "$FILES_JSON" | jq --arg k "$f" --arg v "$exists" '. + {($k): ($v == "true")}')
+          done
+
+          # Build input for OPA
+          jq -n \
+            --argjson repo "$(cat /tmp/repo.json)" \
+            --argjson files "$FILES_JSON" \
+            --arg org "$(echo $REPO | cut -d/ -f1)" \
+            '{repo: $repo, files: $files, org: $org}' > /tmp/input.json
+
+      - name: Run OPA policy checks
+        run: |
+          echo "## Policy Check Results for ${{ inputs.repo }}" > /tmp/results.md
+          echo "" >> /tmp/results.md
+
+          VIOLATIONS=0
+          for policy in policies/repo/repo_policy.rego; do
+            echo "### $(basename $policy)" >> /tmp/results.md
+            RESULT=$(opa eval -d "$policy" -i /tmp/input.json "data" --format pretty 2>&1 || true)
+            echo "\`\`\`" >> /tmp/results.md
+            echo "$RESULT" >> /tmp/results.md
+            echo "\`\`\`" >> /tmp/results.md
+          done
+
+          cat /tmp/results.md
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: policy-check-${{ github.run_number }}
+          path: /tmp/results.md
+          retention-days: 90
